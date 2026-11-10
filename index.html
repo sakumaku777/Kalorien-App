@@ -42,6 +42,21 @@
       </div>
     </div>
 
+
+    <div class="card water-card hidden" id="waterCard">
+      <div class="water-head">
+        <span class="mlabel">💧 Wasser</span>
+        <span id="waterText">0 / 2500 ml</span>
+      </div>
+      <div class="bar water-bar"><i id="waterBar" style="--c:var(--water)"></i></div>
+      <div class="water-btns">
+        <button data-ml="-250" class="minus" aria-label="250 ml abziehen">−</button>
+        <button data-ml="250">+250 ml</button>
+        <button data-ml="500">+500 ml</button>
+        <button data-ml="custom">Menge…</button>
+      </div>
+    </div>
+
     <h2>Mahlzeiten</h2>
     <div id="mealList"></div>
     <p class="empty" id="emptyHint">Noch nichts eingetragen. Tippe unten auf die Kamera.</p>
@@ -76,6 +91,21 @@
     </div>
   </section>
 
+
+  <!-- Wochenübersicht -->
+  <section id="viewWeek" class="view hidden">
+    <div class="card">
+      <div class="chart" id="weekChart"></div>
+      <div class="legend"><span class="goal-swatch"></span> Kalorienziel</div>
+    </div>
+    <div class="card">
+      <h2>Durchschnitt pro Tag</h2>
+      <p class="hint" id="avgHint"></p>
+      <div class="avg-grid" id="avgGrid"></div>
+    </div>
+    <div id="weekDays"></div>
+  </section>
+
   <!-- Einstellungen -->
   <section id="viewSettings" class="view hidden">
     <div class="card">
@@ -84,6 +114,11 @@
       <label class="field">Eiweiß (g) <input id="goalProtein" type="number" inputmode="numeric"></label>
       <label class="field">Kohlenhydrate (g) <input id="goalCarbs" type="number" inputmode="numeric"></label>
       <label class="field">Fett (g) <input id="goalFat" type="number" inputmode="numeric"></label>
+    </div>
+    <div class="card">
+      <h2>Wassertracker</h2>
+      <label class="check"><input type="checkbox" id="waterEnabled"> Wassertracker anzeigen</label>
+      <label class="field">Trinkziel pro Tag (ml) <input id="waterGoal" type="number" inputmode="numeric"></label>
     </div>
     <div class="card">
       <h2>KI für die Fotoanalyse</h2>
@@ -119,6 +154,10 @@
   <button class="tab active" data-view="viewToday" aria-label="Heute">
     <svg viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>
     <span>Heute</span>
+  </button>
+  <button class="tab" data-view="viewWeek" aria-label="Woche">
+    <svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>
+    <span>Woche</span>
   </button>
   <label class="snap" aria-label="Foto machen">
     <svg viewBox="0 0 24 24"><path d="M9 4l-2 2H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-3l-2-2z"/><circle cx="12" cy="12.5" r="3.6" class="lens"/></svg>

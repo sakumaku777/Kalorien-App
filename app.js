@@ -7,6 +7,7 @@ const LS_SETTINGS = 'teller.settings.v1';
 const DEFAULT_SETTINGS = {
   goalKcal: 2200, goalProtein: 140, goalCarbs: 250, goalFat: 70,
   mode: 'gemini', apiKey: '', model: 'gemini-2.5-flash',
+  waterEnabled: true, waterGoal: 2500,
 };
 
 function load(key, fallback) {
@@ -18,8 +19,67 @@ function save(key, value) {
   catch (e) { toast('Speichern fehlgeschlagen: Speicher voll?'); return false; }
 }
 
-let meals = load(LS_MEALS, []);
 let settings = { ...DEFAULT_SETTINGS, ...load(LS_SETTINGS, {}) };
+let meals = [];
+let water = {}; // { 'YYYY-MM-DD': ml }
+
+// IndexedDB: viel mehr Platz als localStorage (Fotos über Jahre)
+const DB_NAME = 'teller', STORE = 'kv';
+let dbPromise = null;
+function openDb() {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return dbPromise;
+}
+async function dbGet(key) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const r = db.transaction(STORE).objectStore(STORE).get(key);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function dbSet(key, value) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function persist(key, value) {
+  try { await dbSet(key, value); return true; }
+  catch { toast('Speichern fehlgeschlagen'); return false; }
+}
+const saveMeals = () => persist('meals', meals);
+const saveWater = () => persist('water', water);
+
+async function initData() {
+  try {
+    meals = (await dbGet('meals')) || [];
+    water = (await dbGet('water')) || {};
+    // Einmalige Übernahme aus der alten Version (localStorage)
+    const old = load(LS_MEALS, null);
+    if (Array.isArray(old) && old.length) {
+      const ids = new Set(meals.map((m) => m.id));
+      meals = meals.concat(old.filter((m) => !ids.has(m.id)));
+      await dbSet('meals', meals);
+      localStorage.removeItem(LS_MEALS);
+    }
+  } catch {
+    meals = load(LS_MEALS, []);
+    toast('Speicher nicht verfügbar. Privater Modus?');
+  }
+  // Browser bitten, die Daten nie automatisch zu löschen
+  try { await navigator.storage?.persist?.(); } catch {}
+}
 
 // ---------- Hilfsfunktionen ----------
 const $ = (id) => document.getElementById(id);
@@ -59,14 +119,16 @@ function sumItems(items) {
 }
 
 // ---------- Ansichten ----------
+let currentView = 'viewToday';
 function showView(id) {
+  currentView = id;
   for (const v of document.querySelectorAll('.view')) v.classList.toggle('hidden', v.id !== id);
   for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.view === id);
-  const dayNav = id === 'viewToday';
+  const dayNav = id === 'viewToday' || id === 'viewWeek';
   $('prevDay').style.visibility = dayNav ? 'visible' : 'hidden';
   $('nextDay').style.visibility = dayNav ? 'visible' : 'hidden';
   $('dayLabel').textContent = id === 'viewSettings' ? 'Einstellungen'
-    : id === 'viewAnalyze' ? 'Mahlzeit' : dayLabel(currentDay);
+    : id === 'viewAnalyze' ? 'Mahlzeit' : id === 'viewWeek' ? weekLabel(currentDay) : dayLabel(currentDay);
   window.scrollTo(0, 0);
 }
 
@@ -113,6 +175,106 @@ function renderToday() {
     list.appendChild(b);
   }
   $('emptyHint').classList.toggle('hidden', dayMeals.length > 0);
+  renderWater();
+}
+
+// ---------- Wasser ----------
+function renderWater() {
+  $('waterCard').classList.toggle('hidden', !settings.waterEnabled);
+  if (!settings.waterEnabled) return;
+  const ml = water[dateKey(currentDay)] || 0;
+  const goal = Number(settings.waterGoal) || 1;
+  $('waterText').textContent = `${fmtMl(ml)} / ${fmtMl(goal)}`;
+  $('waterBar').style.width = Math.min(100, (ml / goal) * 100) + '%';
+}
+function fmtMl(ml) {
+  return ml >= 1000 ? (Math.round(ml / 100) / 10).toLocaleString('de-DE') + ' l' : ml + ' ml';
+}
+async function addWater(delta) {
+  const k = dateKey(currentDay);
+  water[k] = Math.max(0, (water[k] || 0) + delta);
+  if (!water[k]) delete water[k];
+  renderWater();
+  await saveWater();
+}
+
+// ---------- Woche ----------
+function weekStart(d) {
+  const s = new Date(d); s.setHours(12, 0, 0, 0);
+  s.setDate(s.getDate() - ((s.getDay() + 6) % 7)); // Montag
+  return s;
+}
+function weekLabel(d) {
+  const a = weekStart(d), b = new Date(a); b.setDate(b.getDate() + 6);
+  const f = (x) => x.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
+  return `${f(a)} – ${f(b)}`;
+}
+function renderWeek() {
+  $('dayLabel').textContent = weekLabel(currentDay);
+  const start = weekStart(currentDay);
+  const todayKey = dateKey(new Date());
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start); d.setDate(d.getDate() + i);
+    const k = dateKey(d);
+    const dm = meals.filter((m) => m.date === k);
+    days.push({ d, k, count: dm.length, tot: sumItems(dm.flatMap((m) => m.items)), water: water[k] || 0 });
+  }
+  const goal = Number(settings.goalKcal) || 1;
+  const max = Math.max(goal * 1.2, ...days.map((x) => x.tot.kcal));
+  const chart = $('weekChart');
+  chart.innerHTML = '';
+  for (const x of days) {
+    const col = document.createElement('div');
+    col.className = 'col';
+    const h = x.count ? Math.max(2, (x.tot.kcal / max) * 100) : 2;
+    const cls = !x.count ? 'none' : x.tot.kcal > goal ? 'over' : '';
+    col.innerHTML = `<div class="barwrap"><div class="kbar ${cls}" style="height:${h}%"></div></div>
+      <div class="val">${x.count ? r0(x.tot.kcal) : '–'}</div>
+      <div class="day ${x.k === todayKey ? 'today' : ''}">${x.d.toLocaleDateString('de-DE', { weekday: 'short' }).slice(0, 2)}</div>`;
+    col.onclick = () => { currentDay = new Date(x.d); showView('viewToday'); renderToday(); };
+    chart.appendChild(col);
+  }
+  // Ziel-Linie: Höhe relativ zum Balkenbereich (Chart minus Beschriftung)
+  const line = document.createElement('div');
+  line.className = 'goal-line';
+  chart.appendChild(line);
+  requestAnimationFrame(() => {
+    const wrap = chart.querySelector('.barwrap');
+    if (!wrap) return;
+    const top = wrap.offsetTop + wrap.offsetHeight * (1 - goal / max);
+    line.style.top = top + 'px';
+  });
+
+  const logged = days.filter((x) => x.count);
+  const n = logged.length || 1;
+  const avg = (f) => logged.reduce((s, x) => s + f(x), 0) / n;
+  $('avgHint').textContent = logged.length
+    ? `Aus ${logged.length} ${logged.length === 1 ? 'Tag' : 'Tagen'} mit Einträgen.`
+    : 'In dieser Woche gibt es noch keine Einträge.';
+  const tiles = [
+    [r0(avg((x) => x.tot.kcal)), 'kcal'],
+    [r0(avg((x) => x.tot.protein)) + ' g', 'Eiweiß'],
+    [r0(avg((x) => x.tot.carbs)) + ' g', 'Kohlenhydrate'],
+    [r0(avg((x) => x.tot.fat)) + ' g', 'Fett'],
+  ];
+  if (settings.waterEnabled) {
+    const wd = days.filter((x) => x.water);
+    tiles.push([fmtMl(r0(wd.reduce((s, x) => s + x.water, 0) / (wd.length || 1))), 'Wasser']);
+  }
+  $('avgGrid').innerHTML = tiles.map(([v, l]) => `<div class="avg"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+
+  const list = $('weekDays');
+  list.innerHTML = '';
+  for (const x of [...days].reverse()) {
+    if (!x.count && !x.water) continue;
+    const b = document.createElement('button');
+    b.className = 'daybtn';
+    const w = settings.waterEnabled && x.water ? ` · 💧 ${fmtMl(x.water)}` : '';
+    b.innerHTML = `<span>${x.d.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'short' })}<br><span class="sub">${x.count} ${x.count === 1 ? 'Mahlzeit' : 'Mahlzeiten'}${w}</span></span><b>${r0(x.tot.kcal)} kcal</b>`;
+    b.onclick = () => { currentDay = new Date(x.d); showView('viewToday'); renderToday(); };
+    list.appendChild(b);
+  }
 }
 
 // ---------- Bildverarbeitung ----------
@@ -304,12 +466,12 @@ function renderTotals() {
   $('mealTotals').innerHTML = `<span>${r0(s.kcal)} kcal</span><span>E ${r0(s.protein)} g</span><span>K ${r0(s.carbs)} g</span><span>F ${r0(s.fat)} g</span>`;
 }
 
-function saveDraft() {
+async function saveDraft() {
   draft.name = $('mealName').value.trim() || (draft.items[0]?.name ?? 'Mahlzeit');
   const { isNew, ...meal } = draft;
   if (isNew) { meal.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6); meals.push(meal); }
   else meals = meals.map((m) => (m.id === meal.id ? meal : m));
-  if (save(LS_MEALS, meals)) {
+  if (await saveMeals()) {
     draft = null;
     showView('viewToday');
     renderToday();
@@ -319,7 +481,8 @@ function saveDraft() {
 
 // ---------- Einstellungen ----------
 function renderSettings() {
-  for (const k of ['goalKcal', 'goalProtein', 'goalCarbs', 'goalFat', 'apiKey', 'model', 'mode']) $(k).value = settings[k];
+  for (const k of ['goalKcal', 'goalProtein', 'goalCarbs', 'goalFat', 'apiKey', 'model', 'mode', 'waterGoal']) $(k).value = settings[k];
+  $('waterEnabled').checked = !!settings.waterEnabled;
   $('geminiFields').classList.toggle('hidden', settings.mode !== 'gemini');
 }
 
@@ -327,12 +490,28 @@ function renderSettings() {
 for (const t of document.querySelectorAll('.tab')) {
   t.onclick = () => {
     if (t.dataset.view === 'viewSettings') renderSettings();
-    if (t.dataset.view === 'viewToday') renderToday();
     showView(t.dataset.view);
+    if (t.dataset.view === 'viewToday') renderToday();
+    if (t.dataset.view === 'viewWeek') renderWeek();
   };
 }
-$('prevDay').onclick = () => { currentDay.setDate(currentDay.getDate() - 1); renderToday(); };
-$('nextDay').onclick = () => { currentDay.setDate(currentDay.getDate() + 1); renderToday(); };
+function stepDay(dir) {
+  const week = currentView === 'viewWeek';
+  currentDay.setDate(currentDay.getDate() + dir * (week ? 7 : 1));
+  week ? renderWeek() : renderToday();
+}
+$('prevDay').onclick = () => stepDay(-1);
+$('nextDay').onclick = () => stepDay(1);
+
+for (const b of document.querySelectorAll('.water-btns button')) {
+  b.onclick = () => {
+    if (b.dataset.ml === 'custom') {
+      const v = prompt('Wie viel hast du getrunken? (ml)', '330');
+      const ml = Math.round(Number(String(v || '').replace(',', '.')));
+      if (ml > 0) addWater(ml);
+    } else addWater(Number(b.dataset.ml));
+  };
+}
 
 $('photoInput').onchange = async (e) => {
   const file = e.target.files?.[0];
@@ -360,7 +539,7 @@ $('cancelMeal').onclick = () => { draft = null; showView('viewToday'); renderTod
 $('deleteMeal').onclick = () => {
   if (!confirm('Diese Mahlzeit löschen?')) return;
   meals = meals.filter((m) => m.id !== draft.id);
-  save(LS_MEALS, meals);
+  saveMeals();
   draft = null; showView('viewToday'); renderToday();
 };
 
@@ -370,13 +549,15 @@ $('saveSettings').onclick = () => {
   settings.apiKey = $('apiKey').value.trim();
   settings.model = $('model').value.trim() || DEFAULT_SETTINGS.model;
   settings.mode = $('mode').value;
+  settings.waterEnabled = $('waterEnabled').checked;
+  settings.waterGoal = Number($('waterGoal').value) || DEFAULT_SETTINGS.waterGoal;
   save(LS_SETTINGS, settings);
   toast('Einstellungen gespeichert');
   showView('viewToday'); renderToday();
 };
 
 $('exportData').onclick = () => {
-  const blob = new Blob([JSON.stringify({ meals, settings: { ...settings, apiKey: '' } }, null, 1)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ meals, water, settings: { ...settings, apiKey: '' } }, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `teller-backup-${dateKey(new Date())}.json`;
@@ -391,13 +572,16 @@ $('importData').onchange = async (e) => {
     if (!Array.isArray(data.meals)) throw new Error();
     const ids = new Set(meals.map((m) => m.id));
     meals = meals.concat(data.meals.filter((m) => !ids.has(m.id)));
-    save(LS_MEALS, meals);
+    if (data.water && typeof data.water === 'object') {
+      for (const [d, ml] of Object.entries(data.water)) water[d] = Math.max(water[d] || 0, Number(ml) || 0);
+    }
+    await saveMeals(); await saveWater();
     toast(`${data.meals.length} Einträge importiert`);
   } catch { toast('Datei konnte nicht gelesen werden'); }
 };
 
 // ---------- Start ----------
-renderToday();
+initData().then(renderToday);
 if (!settings.apiKey && settings.mode === 'gemini') {
   setTimeout(() => toast('Tipp: Erst in den Einstellungen den Gemini-Schlüssel eintragen.'), 600);
 }
