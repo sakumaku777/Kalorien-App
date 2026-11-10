@@ -419,7 +419,8 @@ async function geminiOnce(model, input) {
 }
 
 async function analyzeWithGemini(input, onStatus = () => {}) {
-  if (settings.apiKey && !settings.apiKey.startsWith('AIza')) throw new Error('Das sieht nicht nach einem Gemini-Schlüssel aus (die beginnen mit „AIza“). Für einen Comet-Schlüssel in den Einstellungen den Modus „Comet“ wählen.');
+  // Nur eindeutig fremde Schlüssel abfangen (Comet/OpenAI beginnen mit „sk-“); Google-Schlüssel gibt es in mehreren Formaten
+  if (/^sk-/i.test(settings.apiKey || '')) throw new Error('Das sieht nach einem Comet-Schlüssel aus, nicht nach einem Gemini-Schlüssel. Für Comet in den Einstellungen den Modus „Comet“ wählen.');
   if (!settings.apiKey) throw new Error('Kein Gemini-API-Schlüssel eingetragen. Bitte in den Einstellungen hinterlegen.');
   const models = [...new Set([settings.model || DEFAULT_SETTINGS.model, ...GEMINI_FALLBACKS])];
   const waits = [0, 2000, 5000]; // bis zu 3 Versuche pro Modell
