@@ -357,28 +357,81 @@ async function analyzeWithComet(dataUrl) {
   return parseResult(text);
 }
 
-async function analyzeWithGemini(dataUrl) {
-  if (settings.apiKey && !settings.apiKey.startsWith('AIza')) throw new Error('Das sieht nicht nach einem Gemini-Schlüssel aus (die beginnen mit „AIza“). Für einen Comet-Schlüssel in den Einstellungen den Modus „Comet“ wählen.');
-  if (!settings.apiKey) throw new Error('Kein Gemini-API-Schlüssel eingetragen. Bitte in den Einstellungen hinterlegen.');
-  const base64 = dataUrl.split(',')[1];
-  const model = encodeURIComponent(settings.model || DEFAULT_SETTINGS.model);
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: 'image/jpeg', data: base64 } }] }],
-      generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
-    }),
-  });
+// Ausweich-Modelle (laut Google-Preisliste im Gratis-Kontingent), falls eins überlastet ist
+const GEMINI_FALLBACKS = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.5-flash'];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+class GeminiError extends Error {
+  constructor(msg, kind) { super(msg); this.kind = kind; } // kind: retry | next | fatal
+}
+
+async function geminiOnce(model, base64) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 45000);
+  let res;
+  try {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: 'image/jpeg', data: base64 } }] }],
+        generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
+      }),
+    });
+  } catch (e) {
+    throw new GeminiError(e.name === 'AbortError' ? 'Zeitüberschreitung' : 'Keine Verbindung', 'retry');
+  } finally { clearTimeout(timer); }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = json?.error?.message || `Fehler ${res.status}`;
-    if (res.status === 429) throw new Error('Gratis-Kontingent für den Moment aufgebraucht. Kurz warten oder den Kopieren-Einfügen-Modus nutzen.');
-    if (res.status === 400 || res.status === 403) throw new Error('Gemini hat abgelehnt: ' + msg + ' (Schlüssel prüfen)');
-    throw new Error('Gemini-Fehler: ' + msg);
+    if (res.status === 400 && /api key|API_KEY/i.test(msg)) throw new GeminiError('Gemini hat den Schlüssel abgelehnt. Bitte in den Einstellungen prüfen.', 'fatal');
+    if (res.status === 401 || res.status === 403) throw new GeminiError('Gemini hat abgelehnt: ' + msg + ' (Schlüssel prüfen)', 'fatal');
+    if (res.status === 404 || /no longer available|not found|not supported/i.test(msg)) throw new GeminiError(msg, 'next');
+    if (res.status === 429) {
+      // Tageslimit: anderes Modell probieren. Minutenlimit: kurz warten.
+      throw new GeminiError(msg, /per ?day|daily|PerDay/i.test(msg) ? 'next' : 'retry');
+    }
+    if (res.status >= 500) throw new GeminiError(msg, 'retry'); // 503 = überlastet
+    throw new GeminiError('Gemini-Fehler: ' + msg, 'fatal');
   }
   const text = (json.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+  if (!text) throw new GeminiError('Leere Antwort', 'retry');
   return parseResult(text);
+}
+
+async function analyzeWithGemini(dataUrl, onStatus = () => {}) {
+  if (settings.apiKey && !settings.apiKey.startsWith('AIza')) throw new Error('Das sieht nicht nach einem Gemini-Schlüssel aus (die beginnen mit „AIza“). Für einen Comet-Schlüssel in den Einstellungen den Modus „Comet“ wählen.');
+  if (!settings.apiKey) throw new Error('Kein Gemini-API-Schlüssel eingetragen. Bitte in den Einstellungen hinterlegen.');
+  const base64 = dataUrl.split(',')[1];
+  const models = [...new Set([settings.model || DEFAULT_SETTINGS.model, ...GEMINI_FALLBACKS])];
+  const waits = [0, 2000, 5000]; // bis zu 3 Versuche pro Modell
+  let last = null;
+  for (let mi = 0; mi < models.length; mi++) {
+    const model = models[mi];
+    if (mi > 0) onStatus(`Gemini ist überlastet, weiche auf ${model} aus …`);
+    for (let attempt = 0; attempt < waits.length; attempt++) {
+      if (waits[attempt]) {
+        onStatus(`Gemini ist gerade überlastet, neuer Versuch in ${waits[attempt] / 1000} s …`);
+        await sleep(waits[attempt]);
+        onStatus(`Analysiere dein Essen (Versuch ${attempt + 1}) …`);
+      }
+      try {
+        return await geminiOnce(model, base64);
+      } catch (e) {
+        if (!(e instanceof GeminiError)) throw e; // z.B. Antwort nicht lesbar
+        last = e;
+        if (e.kind === 'fatal') throw e;
+        if (e.kind === 'next') break;
+      }
+    }
+  }
+  // Alles überlastet: wenn ein Comet-Schlüssel da ist, darauf ausweichen
+  if (settings.cometKey) {
+    onStatus('Gemini komplett überlastet, nutze Comet …');
+    return analyzeWithComet(dataUrl);
+  }
+  throw new Error('Gemini ist gerade überlastet (' + (last?.message || 'unbekannt') + '). Probier es in ein paar Minuten nochmal oder nutze unten den Kopieren-Einfügen-Weg.');
 }
 
 // ---------- Editor ----------
@@ -404,9 +457,12 @@ function startNewMeal(photoDataUrl, thumbDataUrl) {
   } else {
     $('pasteBox').classList.add('hidden');
     setStatus('<span class="spinner"></span>Analysiere dein Essen …');
-    (settings.mode === 'comet' ? analyzeWithComet : analyzeWithGemini)(photoDataUrl)
-      .then(applyResult)
+    const mine = draft; // falls der Nutzer zwischendurch abbricht, Ergebnis verwerfen
+    const onStatus = (t) => { if (draft === mine) setStatus('<span class="spinner"></span>' + escapeHtml(t)); };
+    (settings.mode === 'comet' ? analyzeWithComet(photoDataUrl) : analyzeWithGemini(photoDataUrl, onStatus))
+      .then((r) => { if (draft === mine) applyResult(r); })
       .catch((e) => {
+        if (draft !== mine) return;
         setStatus(e.message, true);
         $('pasteBox').classList.remove('hidden');
       });
