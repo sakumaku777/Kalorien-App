@@ -57,15 +57,25 @@
       </div>
     </div>
 
+    <button class="btn secondary textentry" id="textEntryBtn">✏️ Ohne Foto eintragen</button>
+
     <h2>Mahlzeiten</h2>
     <div id="mealList"></div>
-    <p class="empty" id="emptyHint">Noch nichts eingetragen. Tippe unten auf die Kamera.</p>
+    <p class="empty" id="emptyHint">Noch nichts eingetragen. Mach ein Foto mit der Kamera unten oder trag dein Essen per Text ein.</p>
   </section>
 
   <!-- Analyse / Bearbeiten -->
   <section id="viewAnalyze" class="view hidden">
     <div class="card">
       <img id="previewImg" class="preview" alt="Foto deiner Mahlzeit">
+      <div id="textBox" class="hidden">
+        <label class="field">Was hast du gegessen oder getrunken?
+          <textarea id="textInput" rows="4" placeholder="z.B. 2 Scheiben Vollkornbrot mit Butter und Gouda, ein Apfel und ein Latte Macchiato"></textarea>
+        </label>
+        <p class="warn">⚠️ Ohne Foto ist das nur eine grobe Schätzung. Fotos sind deutlich genauer. Mengen helfen sehr (z.B. „2 Scheiben“, „großer Teller“, „300 g“).</p>
+        <button class="btn" id="analyzeText">Kalorien schätzen</button>
+        <button class="btn link" id="backFromText">Abbrechen</button>
+      </div>
       <div id="analyzeStatus" class="status"></div>
 
       <div id="pasteBox" class="hidden">

@@ -308,6 +308,23 @@ Antworte NUR mit JSON in genau diesem Format, ohne weiteren Text:
 {"meal_name": "kurzer deutscher Name", "items": [{"name": "Lebensmittel auf Deutsch", "grams": 150, "kcal": 250, "protein_g": 10, "carbs_g": 30, "fat_g": 8}], "notes": "kurzer Hinweis zur Unsicherheit"}
 Wenn kein Essen zu sehen ist, gib {"meal_name": "", "items": [], "notes": "Kein Essen erkannt"} zurück.`;
 
+const TEXT_PROMPT = `Du bist Ernährungsexperte. Der Nutzer beschreibt in eigenen Worten, was er gegessen oder getrunken hat.
+Zerlege die Beschreibung in einzelne Lebensmittel bzw. Komponenten. Wenn keine Menge genannt ist,
+nimm eine typische durchschnittliche Portion für Erwachsene in Deutschland an. Schätze Gramm, Kalorien und Makronährstoffe.
+Denke an typische versteckte Kalorien (Öl beim Braten, Butter aufs Brot, Soßen), wenn sie üblich sind.
+Antworte NUR mit JSON in genau diesem Format, ohne weiteren Text:
+{"meal_name": "kurzer deutscher Name", "items": [{"name": "Lebensmittel auf Deutsch", "grams": 150, "kcal": 250, "protein_g": 10, "carbs_g": 30, "fat_g": 8}], "notes": "kurzer Hinweis, welche Annahmen du getroffen hast"}
+Wenn die Beschreibung kein Essen oder Getränk ist, gib {"meal_name": "", "items": [], "notes": "Kein Essen erkannt"} zurück.
+
+Beschreibung des Nutzers:
+`;
+
+// input = { photo: dataUrl } oder { text: '...' }
+function promptFor(input) {
+  return input.photo ? PROMPT : TEXT_PROMPT + input.text;
+}
+let currentInput = null;
+
 function parseResult(text) {
   let t = String(text || '').trim();
   t = t.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
@@ -325,7 +342,7 @@ function parseResult(text) {
   return { name: String(data.meal_name || data.name || ''), items, notes: String(data.notes || '') };
 }
 
-async function analyzeWithComet(dataUrl) {
+async function analyzeWithComet(input) {
   if (!settings.cometKey) throw new Error('Kein Comet-API-Schlüssel eingetragen. Bitte in den Einstellungen hinterlegen.');
   const base = (settings.cometBase || DEFAULT_SETTINGS.cometBase).replace(/\/+$/, '');
   let res;
@@ -336,10 +353,9 @@ async function analyzeWithComet(dataUrl) {
       body: JSON.stringify({
         model: settings.cometModel || DEFAULT_SETTINGS.cometModel,
         temperature: 0.2,
-        messages: [{ role: 'user', content: [
-          { type: 'text', text: PROMPT },
-          { type: 'image_url', image_url: { url: dataUrl } },
-        ] }],
+        messages: [{ role: 'user', content: input.photo
+          ? [{ type: 'text', text: PROMPT }, { type: 'image_url', image_url: { url: input.photo } }]
+          : promptFor(input) }],
       }),
     });
   } catch {
@@ -365,7 +381,7 @@ class GeminiError extends Error {
   constructor(msg, kind) { super(msg); this.kind = kind; } // kind: retry | next | fatal
 }
 
-async function geminiOnce(model, base64) {
+async function geminiOnce(model, input) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 45000);
   let res;
@@ -375,7 +391,9 @@ async function geminiOnce(model, base64) {
       signal: ctrl.signal,
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: 'image/jpeg', data: base64 } }] }],
+        contents: [{ parts: input.photo
+          ? [{ text: PROMPT }, { inline_data: { mime_type: 'image/jpeg', data: input.photo.split(',')[1] } }]
+          : [{ text: promptFor(input) }] }],
         generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
       }),
     });
@@ -400,10 +418,9 @@ async function geminiOnce(model, base64) {
   return parseResult(text);
 }
 
-async function analyzeWithGemini(dataUrl, onStatus = () => {}) {
+async function analyzeWithGemini(input, onStatus = () => {}) {
   if (settings.apiKey && !settings.apiKey.startsWith('AIza')) throw new Error('Das sieht nicht nach einem Gemini-Schlüssel aus (die beginnen mit „AIza“). Für einen Comet-Schlüssel in den Einstellungen den Modus „Comet“ wählen.');
   if (!settings.apiKey) throw new Error('Kein Gemini-API-Schlüssel eingetragen. Bitte in den Einstellungen hinterlegen.');
-  const base64 = dataUrl.split(',')[1];
   const models = [...new Set([settings.model || DEFAULT_SETTINGS.model, ...GEMINI_FALLBACKS])];
   const waits = [0, 2000, 5000]; // bis zu 3 Versuche pro Modell
   let last = null;
@@ -414,10 +431,10 @@ async function analyzeWithGemini(dataUrl, onStatus = () => {}) {
       if (waits[attempt]) {
         onStatus(`Gemini ist gerade überlastet, neuer Versuch in ${waits[attempt] / 1000} s …`);
         await sleep(waits[attempt]);
-        onStatus(`Analysiere dein Essen (Versuch ${attempt + 1}) …`);
+        onStatus(`Schätze dein Essen (Versuch ${attempt + 1}) …`);
       }
       try {
-        return await geminiOnce(model, base64);
+        return await geminiOnce(model, input);
       } catch (e) {
         if (!(e instanceof GeminiError)) throw e; // z.B. Antwort nicht lesbar
         last = e;
@@ -429,7 +446,7 @@ async function analyzeWithGemini(dataUrl, onStatus = () => {}) {
   // Alles überlastet: wenn ein Comet-Schlüssel da ist, darauf ausweichen
   if (settings.cometKey) {
     onStatus('Gemini komplett überlastet, nutze Comet …');
-    return analyzeWithComet(dataUrl);
+    return analyzeWithComet(input);
   }
   throw new Error('Gemini ist gerade überlastet (' + (last?.message || 'unbekannt') + '). Probier es in ein paar Minuten nochmal oder nutze unten den Kopieren-Einfügen-Weg.');
 }
@@ -437,36 +454,55 @@ async function analyzeWithGemini(dataUrl, onStatus = () => {}) {
 // ---------- Editor ----------
 let draft = null; // {id?, date, time, name, photo, items, isNew}
 
-function startNewMeal(photoDataUrl, thumbDataUrl) {
+function newDraft(photo) {
   const now = new Date();
-  const day = new Date(currentDay); // in den gerade angezeigten Tag eintragen
   draft = {
-    id: null, date: dateKey(day), time: now.toTimeString().slice(0, 5),
-    name: '', photo: thumbDataUrl, items: [], isNew: true,
+    id: null, date: dateKey(currentDay), time: now.toTimeString().slice(0, 5), // in den angezeigten Tag
+    name: '', photo, items: [], isNew: true,
   };
-  $('previewImg').src = photoDataUrl;
-  $('previewImg').classList.remove('hidden');
   $('resultBox').classList.add('hidden');
   $('deleteMeal').classList.add('hidden');
+  $('pasteBox').classList.add('hidden');
+  $('textBox').classList.add('hidden');
   $('pasteArea').value = '';
-  showView('viewAnalyze');
+  setStatus('');
+}
 
+function startNewMeal(photoDataUrl, thumbDataUrl) {
+  newDraft(thumbDataUrl);
+  $('previewImg').src = photoDataUrl;
+  $('previewImg').classList.remove('hidden');
+  showView('viewAnalyze');
+  runAnalysis({ photo: photoDataUrl });
+}
+
+function startTextMeal() {
+  newDraft(null);
+  $('previewImg').classList.add('hidden');
+  $('textInput').value = '';
+  $('textBox').classList.remove('hidden');
+  showView('viewAnalyze');
+  setTimeout(() => $('textInput').focus(), 50);
+}
+
+function runAnalysis(input) {
+  currentInput = input;
   if (settings.mode === 'paste') {
-    $('analyzeStatus').textContent = '';
+    setStatus('');
     $('pasteBox').classList.remove('hidden');
-  } else {
-    $('pasteBox').classList.add('hidden');
-    setStatus('<span class="spinner"></span>Analysiere dein Essen …');
-    const mine = draft; // falls der Nutzer zwischendurch abbricht, Ergebnis verwerfen
-    const onStatus = (t) => { if (draft === mine) setStatus('<span class="spinner"></span>' + escapeHtml(t)); };
-    (settings.mode === 'comet' ? analyzeWithComet(photoDataUrl) : analyzeWithGemini(photoDataUrl, onStatus))
-      .then((r) => { if (draft === mine) applyResult(r); })
-      .catch((e) => {
-        if (draft !== mine) return;
-        setStatus(e.message, true);
-        $('pasteBox').classList.remove('hidden');
-      });
+    return;
   }
+  $('pasteBox').classList.add('hidden');
+  setStatus('<span class="spinner"></span>' + (input.photo ? 'Analysiere dein Essen …' : 'Schätze dein Essen …'));
+  const mine = draft; // falls der Nutzer zwischendurch abbricht, Ergebnis verwerfen
+  const onStatus = (t) => { if (draft === mine) setStatus('<span class="spinner"></span>' + escapeHtml(t)); };
+  (settings.mode === 'comet' ? analyzeWithComet(input) : analyzeWithGemini(input, onStatus))
+    .then((r) => { if (draft === mine) applyResult(r); })
+    .catch((e) => {
+      if (draft !== mine) return;
+      setStatus(e.message, true);
+      $('pasteBox').classList.remove('hidden');
+    });
 }
 
 function setStatus(html, isError) {
@@ -476,11 +512,14 @@ function setStatus(html, isError) {
 }
 
 function applyResult(r) {
+  const fromText = currentInput && !currentInput.photo;
   if (!r.items.length) {
-    setStatus(r.notes || 'Kein Essen erkannt. Du kannst Lebensmittel auch von Hand hinzufügen.', true);
+    setStatus(escapeHtml(r.notes || 'Kein Essen erkannt. Du kannst Lebensmittel auch von Hand hinzufügen.'), true);
   } else {
-    setStatus(r.notes ? 'Hinweis: ' + escapeHtml(r.notes) : '');
+    const warn = fromText ? '<b>Grobe Schätzung aus Text.</b> Mit Foto wird es genauer. ' : '';
+    setStatus(warn + (r.notes ? 'Hinweis: ' + escapeHtml(r.notes) : ''));
   }
+  $('textBox').classList.add('hidden');
   draft.name = r.name || draft.name;
   draft.items = r.items;
   $('pasteBox').classList.add('hidden');
@@ -494,6 +533,7 @@ function openEditor(meal) {
   else $('previewImg').classList.add('hidden');
   setStatus('');
   $('pasteBox').classList.add('hidden');
+  $('textBox').classList.add('hidden');
   $('deleteMeal').classList.remove('hidden');
   showView('viewAnalyze');
   renderEditor();
@@ -617,8 +657,9 @@ $('photoInput').onchange = async (e) => {
 };
 
 $('copyPrompt').onclick = async () => {
-  try { await navigator.clipboard.writeText(PROMPT); toast('Befehl kopiert. Jetzt in ChatGPT/Claude einfügen.'); }
-  catch { $('pasteArea').value = PROMPT; toast('Kopieren nicht möglich. Befehl steht im Textfeld.'); }
+  const text = currentInput ? promptFor(currentInput) : PROMPT;
+  try { await navigator.clipboard.writeText(text); toast('Befehl kopiert. Jetzt in ChatGPT/Claude einfügen.'); }
+  catch { $('pasteArea').value = text; toast('Kopieren nicht möglich. Befehl steht im Textfeld.'); }
 };
 $('parsePaste').onclick = () => {
   try { applyResult(parseResult($('pasteArea').value)); }
@@ -628,6 +669,14 @@ $('parsePaste').onclick = () => {
 $('addItem').onclick = () => { draft.items.push({ name: '', grams: 100, kcal: 0, protein: 0, carbs: 0, fat: 0 }); renderEditor(); };
 $('mealName').oninput = () => { draft.name = $('mealName').value; };
 $('saveMeal').onclick = saveDraft;
+$('textEntryBtn').onclick = startTextMeal;
+$('analyzeText').onclick = () => {
+  const t = $('textInput').value.trim();
+  if (!t) { toast('Schreib kurz, was du gegessen hast.'); return; }
+  $('textBox').classList.add('hidden');
+  runAnalysis({ text: t });
+};
+$('backFromText').onclick = () => { draft = null; showView('viewToday'); renderToday(); };
 $('backFromPaste').onclick = () => { draft = null; showView('viewToday'); renderToday(); };
 $('cancelMeal').onclick = () => { draft = null; showView('viewToday'); renderToday(); };
 $('deleteMeal').onclick = () => {
