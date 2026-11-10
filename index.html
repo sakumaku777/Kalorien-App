@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Teller</title>
+<meta name="theme-color" content="#16a34a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Teller">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <button class="iconbtn" id="prevDay" aria-label="Vorheriger Tag">‹</button>
+  <h1 id="dayLabel">Heute</h1>
+  <button class="iconbtn" id="nextDay" aria-label="Nächster Tag">›</button>
+</header>
+
+<main>
+  <!-- Tagesübersicht -->
+  <section id="viewToday" class="view">
+    <div class="card ring-card">
+      <div class="ring-wrap">
+        <svg viewBox="0 0 120 120" class="ring">
+          <circle cx="60" cy="60" r="52" class="ring-bg"/>
+          <circle cx="60" cy="60" r="52" class="ring-fg" id="ringFg"/>
+        </svg>
+        <div class="ring-text">
+          <div class="big" id="kcalLeft">0</div>
+          <div class="small" id="kcalLeftLabel">kcal übrig</div>
+        </div>
+      </div>
+      <div class="macros">
+        <div class="macro"><span class="mlabel">Eiweiß</span><span id="mProtein">0 g</span><div class="bar"><i id="bProtein" style="--c:var(--protein)"></i></div></div>
+        <div class="macro"><span class="mlabel">Kohlenhydrate</span><span id="mCarbs">0 g</span><div class="bar"><i id="bCarbs" style="--c:var(--carbs)"></i></div></div>
+        <div class="macro"><span class="mlabel">Fett</span><span id="mFat">0 g</span><div class="bar"><i id="bFat" style="--c:var(--fat)"></i></div></div>
+      </div>
+    </div>
+
+    <h2>Mahlzeiten</h2>
+    <div id="mealList"></div>
+    <p class="empty" id="emptyHint">Noch nichts eingetragen. Tippe unten auf die Kamera.</p>
+  </section>
+
+  <!-- Analyse / Bearbeiten -->
+  <section id="viewAnalyze" class="view hidden">
+    <div class="card">
+      <img id="previewImg" class="preview" alt="Foto deiner Mahlzeit">
+      <div id="analyzeStatus" class="status"></div>
+
+      <div id="pasteBox" class="hidden">
+        <p class="hint"><b>Kopieren-Einfügen-Modus:</b> 1) Befehl kopieren. 2) Foto in der ChatGPT- oder Claude-App hochladen und den Befehl einfügen. 3) Die komplette Antwort kopieren und hier einfügen.</p>
+        <button class="btn secondary" id="copyPrompt">Befehl kopieren</button>
+        <textarea id="pasteArea" rows="5" placeholder="Antwort von ChatGPT/Claude hier einfügen"></textarea>
+        <button class="btn" id="parsePaste">Antwort übernehmen</button>
+      </div>
+
+      <div id="resultBox" class="hidden">
+        <label class="field">Name der Mahlzeit
+          <input id="mealName" type="text">
+        </label>
+        <div id="itemList"></div>
+        <button class="btn link" id="addItem">+ Lebensmittel hinzufügen</button>
+        <div class="totals" id="mealTotals"></div>
+        <div class="row">
+          <button class="btn secondary" id="cancelMeal">Abbrechen</button>
+          <button class="btn" id="saveMeal">Speichern</button>
+        </div>
+        <button class="btn danger link hidden" id="deleteMeal">Mahlzeit löschen</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Einstellungen -->
+  <section id="viewSettings" class="view hidden">
+    <div class="card">
+      <h2>Ziele</h2>
+      <label class="field">Kalorien pro Tag <input id="goalKcal" type="number" inputmode="numeric"></label>
+      <label class="field">Eiweiß (g) <input id="goalProtein" type="number" inputmode="numeric"></label>
+      <label class="field">Kohlenhydrate (g) <input id="goalCarbs" type="number" inputmode="numeric"></label>
+      <label class="field">Fett (g) <input id="goalFat" type="number" inputmode="numeric"></label>
+    </div>
+    <div class="card">
+      <h2>KI für die Fotoanalyse</h2>
+      <label class="field">Modus
+        <select id="mode">
+          <option value="gemini">Gemini (automatisch, Gratis-Kontingent)</option>
+          <option value="paste">Kopieren-Einfügen (ChatGPT/Claude Gratis-App)</option>
+        </select>
+      </label>
+      <div id="geminiFields">
+        <label class="field">Gemini-API-Schlüssel
+          <input id="apiKey" type="password" autocomplete="off" placeholder="AIza…">
+        </label>
+        <p class="hint">Kostenlos holen: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → „Create API key“. Der Schlüssel bleibt nur auf diesem Gerät gespeichert.</p>
+        <label class="field">Modell
+          <input id="model" type="text">
+        </label>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Daten</h2>
+      <div class="row">
+        <button class="btn secondary" id="exportData">Exportieren</button>
+        <label class="btn secondary filebtn">Importieren<input type="file" id="importData" accept="application/json" hidden></label>
+      </div>
+      <p class="hint">Alle Einträge liegen nur auf deinem Handy. Exportiere ab und zu, damit nichts verloren geht.</p>
+    </div>
+    <button class="btn" id="saveSettings">Einstellungen speichern</button>
+  </section>
+</main>
+
+<nav class="tabbar">
+  <button class="tab active" data-view="viewToday" aria-label="Heute">
+    <svg viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>
+    <span>Heute</span>
+  </button>
+  <label class="snap" aria-label="Foto machen">
+    <svg viewBox="0 0 24 24"><path d="M9 4l-2 2H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-3l-2-2z"/><circle cx="12" cy="12.5" r="3.6" class="lens"/></svg>
+    <input type="file" id="photoInput" accept="image/*" hidden>
+  </label>
+  <button class="tab" data-view="viewSettings" aria-label="Einstellungen">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    <span>Einstellungen</span>
+  </button>
+</nav>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>
