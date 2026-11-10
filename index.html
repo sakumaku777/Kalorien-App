@@ -73,6 +73,7 @@
         <button class="btn secondary" id="copyPrompt">Befehl kopieren</button>
         <textarea id="pasteArea" rows="5" placeholder="Antwort von ChatGPT/Claude hier einfügen"></textarea>
         <button class="btn" id="parsePaste">Antwort übernehmen</button>
+        <button class="btn link" id="backFromPaste">Abbrechen</button>
       </div>
 
       <div id="resultBox" class="hidden">
@@ -125,6 +126,7 @@
       <label class="field">Modus
         <select id="mode">
           <option value="gemini">Gemini (automatisch, Gratis-Kontingent)</option>
+          <option value="comet">Comet (eigener Comet-Schlüssel, kostenpflichtig)</option>
           <option value="paste">Kopieren-Einfügen (ChatGPT/Claude Gratis-App)</option>
         </select>
       </label>
@@ -132,9 +134,21 @@
         <label class="field">Gemini-API-Schlüssel
           <input id="apiKey" type="password" autocomplete="off" placeholder="AIza…">
         </label>
-        <p class="hint">Kostenlos holen: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → „Create API key“. Der Schlüssel bleibt nur auf diesem Gerät gespeichert.</p>
+        <p class="hint">Kostenlos holen: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → „Create API key“. Der Schlüssel beginnt mit „AIza“. Der Schlüssel bleibt nur auf diesem Gerät gespeichert.</p>
         <label class="field">Modell
           <input id="model" type="text">
+        </label>
+      </div>
+      <div id="cometFields" class="hidden">
+        <label class="field">Comet-API-Schlüssel
+          <input id="cometKey" type="password" autocomplete="off" placeholder="sk-…">
+        </label>
+        <label class="field">Modell
+          <input id="cometModel" type="text">
+        </label>
+        <p class="hint">Das Modell muss Bilder verstehen. Welche Namen es gibt, siehst du in deinem Comet-Konto unter „Models“.</p>
+        <label class="field">Adresse (nur ändern, wenn nötig)
+          <input id="cometBase" type="text">
         </label>
       </div>
     </div>

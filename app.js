@@ -6,7 +6,8 @@ const LS_SETTINGS = 'teller.settings.v1';
 
 const DEFAULT_SETTINGS = {
   goalKcal: 2200, goalProtein: 140, goalCarbs: 250, goalFat: 70,
-  mode: 'gemini', apiKey: '', model: 'gemini-2.5-flash',
+  mode: 'gemini', apiKey: '', model: 'gemini-3.1-flash-lite',
+  cometKey: '', cometBase: 'https://api.cometapi.com/v1', cometModel: 'gpt-4o-mini',
   waterEnabled: true, waterGoal: 2500,
 };
 
@@ -20,6 +21,8 @@ function save(key, value) {
 }
 
 let settings = { ...DEFAULT_SETTINGS, ...load(LS_SETTINGS, {}) };
+// Altes Standardmodell ist für neue Google-Konten nicht mehr freigeschaltet
+if (settings.model === 'gemini-2.5-flash') settings.model = DEFAULT_SETTINGS.model;
 let meals = [];
 let water = {}; // { 'YYYY-MM-DD': ml }
 
@@ -322,7 +325,40 @@ function parseResult(text) {
   return { name: String(data.meal_name || data.name || ''), items, notes: String(data.notes || '') };
 }
 
+async function analyzeWithComet(dataUrl) {
+  if (!settings.cometKey) throw new Error('Kein Comet-API-Schlüssel eingetragen. Bitte in den Einstellungen hinterlegen.');
+  const base = (settings.cometBase || DEFAULT_SETTINGS.cometBase).replace(/\/+$/, '');
+  let res;
+  try {
+    res = await fetch(base + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + settings.cometKey },
+      body: JSON.stringify({
+        model: settings.cometModel || DEFAULT_SETTINGS.cometModel,
+        temperature: 0.2,
+        messages: [{ role: 'user', content: [
+          { type: 'text', text: PROMPT },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ] }],
+      }),
+    });
+  } catch {
+    throw new Error('Keine Verbindung zu Comet möglich. Internet prüfen oder Gemini nutzen.');
+  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = json?.error?.message || json?.message || `Fehler ${res.status}`;
+    if (res.status === 401 || res.status === 403) throw new Error('Comet hat den Schlüssel abgelehnt: ' + msg);
+    if (res.status === 402 || /quota|balance|credit/i.test(msg)) throw new Error('Comet-Guthaben aufgebraucht: ' + msg);
+    throw new Error('Comet-Fehler: ' + msg + ' (Modellname prüfen)');
+  }
+  const c = json.choices?.[0]?.message?.content;
+  const text = Array.isArray(c) ? c.map((p) => p.text || '').join('') : c;
+  return parseResult(text);
+}
+
 async function analyzeWithGemini(dataUrl) {
+  if (settings.apiKey && !settings.apiKey.startsWith('AIza')) throw new Error('Das sieht nicht nach einem Gemini-Schlüssel aus (die beginnen mit „AIza“). Für einen Comet-Schlüssel in den Einstellungen den Modus „Comet“ wählen.');
   if (!settings.apiKey) throw new Error('Kein Gemini-API-Schlüssel eingetragen. Bitte in den Einstellungen hinterlegen.');
   const base64 = dataUrl.split(',')[1];
   const model = encodeURIComponent(settings.model || DEFAULT_SETTINGS.model);
@@ -368,7 +404,7 @@ function startNewMeal(photoDataUrl, thumbDataUrl) {
   } else {
     $('pasteBox').classList.add('hidden');
     setStatus('<span class="spinner"></span>Analysiere dein Essen …');
-    analyzeWithGemini(photoDataUrl)
+    (settings.mode === 'comet' ? analyzeWithComet : analyzeWithGemini)(photoDataUrl)
       .then(applyResult)
       .catch((e) => {
         setStatus(e.message, true);
@@ -481,7 +517,8 @@ async function saveDraft() {
 
 // ---------- Einstellungen ----------
 function renderSettings() {
-  for (const k of ['goalKcal', 'goalProtein', 'goalCarbs', 'goalFat', 'apiKey', 'model', 'mode', 'waterGoal']) $(k).value = settings[k];
+  for (const k of ['goalKcal', 'goalProtein', 'goalCarbs', 'goalFat', 'apiKey', 'model', 'mode', 'waterGoal', 'cometKey', 'cometBase', 'cometModel']) $(k).value = settings[k];
+  $('cometFields').classList.toggle('hidden', settings.mode !== 'comet');
   $('waterEnabled').checked = !!settings.waterEnabled;
   $('geminiFields').classList.toggle('hidden', settings.mode !== 'gemini');
 }
@@ -535,6 +572,7 @@ $('parsePaste').onclick = () => {
 $('addItem').onclick = () => { draft.items.push({ name: '', grams: 100, kcal: 0, protein: 0, carbs: 0, fat: 0 }); renderEditor(); };
 $('mealName').oninput = () => { draft.name = $('mealName').value; };
 $('saveMeal').onclick = saveDraft;
+$('backFromPaste').onclick = () => { draft = null; showView('viewToday'); renderToday(); };
 $('cancelMeal').onclick = () => { draft = null; showView('viewToday'); renderToday(); };
 $('deleteMeal').onclick = () => {
   if (!confirm('Diese Mahlzeit löschen?')) return;
@@ -543,12 +581,18 @@ $('deleteMeal').onclick = () => {
   draft = null; showView('viewToday'); renderToday();
 };
 
-$('mode').onchange = () => $('geminiFields').classList.toggle('hidden', $('mode').value !== 'gemini');
+$('mode').onchange = () => {
+  $('geminiFields').classList.toggle('hidden', $('mode').value !== 'gemini');
+  $('cometFields').classList.toggle('hidden', $('mode').value !== 'comet');
+};
 $('saveSettings').onclick = () => {
   for (const k of ['goalKcal', 'goalProtein', 'goalCarbs', 'goalFat']) settings[k] = Number($(k).value) || DEFAULT_SETTINGS[k];
   settings.apiKey = $('apiKey').value.trim();
   settings.model = $('model').value.trim() || DEFAULT_SETTINGS.model;
   settings.mode = $('mode').value;
+  settings.cometKey = $('cometKey').value.trim();
+  settings.cometBase = $('cometBase').value.trim() || DEFAULT_SETTINGS.cometBase;
+  settings.cometModel = $('cometModel').value.trim() || DEFAULT_SETTINGS.cometModel;
   settings.waterEnabled = $('waterEnabled').checked;
   settings.waterGoal = Number($('waterGoal').value) || DEFAULT_SETTINGS.waterGoal;
   save(LS_SETTINGS, settings);
@@ -582,7 +626,7 @@ $('importData').onchange = async (e) => {
 
 // ---------- Start ----------
 initData().then(renderToday);
-if (!settings.apiKey && settings.mode === 'gemini') {
-  setTimeout(() => toast('Tipp: Erst in den Einstellungen den Gemini-Schlüssel eintragen.'), 600);
+if ((settings.mode === 'gemini' && !settings.apiKey) || (settings.mode === 'comet' && !settings.cometKey)) {
+  setTimeout(() => toast('Tipp: Erst in den Einstellungen deinen API-Schlüssel eintragen.'), 600);
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
